@@ -11,6 +11,7 @@ from app.api.websockets import ws_router
 from app.config import settings
 from app.core.gateway import model_gateway
 from app.database.session import check_db_health, engine
+import app.tools  # Initialize tool registry
 
 # Configure Structured Logging
 logging.basicConfig(

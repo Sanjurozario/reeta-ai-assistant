@@ -230,6 +230,14 @@ class TaskManager:
         return task is not None
 
     @classmethod
+    async def get_task(cls, session: AsyncSession, task_id: uuid.UUID) -> Optional[Task]:
+        """Retrieves a task with its plan steps."""
+        from sqlalchemy.orm import selectinload
+        query = select(Task).options(selectinload(Task.steps)).where(Task.id == task_id)
+        res = await session.execute(query)
+        return res.scalar_one_or_none()
+
+    @classmethod
     def register_worker(cls, task_id: str, worker: asyncio.Task, cancel_event: asyncio.Event):
         cls._active_workers[task_id] = worker
         cls._cancellation_events[task_id] = cancel_event
