@@ -31,11 +31,9 @@ if is_sqlite:
     def on_connect(dbapi_conn, rec):
         try:
             import sqlite_vec
-            async def _load(conn):
-                await conn.enable_load_extension(True)
-                await conn.load_extension(sqlite_vec.loadable_path())
-                await conn.enable_load_extension(False)
-            dbapi_conn.run_async(_load)
+            dbapi_conn.enable_load_extension(True)
+            sqlite_vec.load(dbapi_conn)
+            dbapi_conn.enable_load_extension(False)
         except Exception as e:
             logger.warning(f"Failed loading sqlite-vec extension: {e}")
 

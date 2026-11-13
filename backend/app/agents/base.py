@@ -108,6 +108,20 @@ class BaseAgent(ABC):
                     f"[Task {tid_str}] [Agent:{self.name}] [Synthesis] Completed in {elapsed_ms}ms "
                     f"via {gw_resp.provider} ({gw_resp.model})"
                 )
+                try:
+                    from app.core.tasks import broadcaster
+                    await broadcaster.broadcast(
+                        event="agent_message",
+                        task_id=tid_str,
+                        payload={
+                            "content": gw_resp.content,
+                            "provider": gw_resp.provider,
+                            "model": gw_resp.model,
+                            "agent": self.name,
+                        },
+                    )
+                except Exception as b_err:
+                    logger.warning(f"Failed to broadcast agent_message: {b_err}")
                 return AgentStepResult(
                     success=True,
                     agent_name=self.name,

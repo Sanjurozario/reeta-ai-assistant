@@ -115,29 +115,48 @@ class MemoryService:
         """
         query_vec = await cls.compute_embedding(query, dimension=settings.EMBEDDING_DIMENSION)
 
-        # Dual database support: SQLite with sqlite-vec vs PostgreSQL with pgvector
+        # Dual database support: SQLite fallback vs PostgreSQL with pgvector
         is_sqlite = (session.bind.dialect.name == "sqlite") if session.bind else settings.DATABASE_URL.startswith("sqlite")
 
         if is_sqlite:
-            from sqlalchemy import func
-            q_json = json.dumps(query_vec)
-            stmt = (
-                select(Memory, func.vec_distance_cosine(Memory.embedding, q_json).label("distance"))
-                .where(Memory.user_id == user_id)
-            )
+            stmt = select(Memory).where(Memory.user_id == user_id)
+            if memory_type:
+                stmt = stmt.where(Memory.memory_type == memory_type)
+            res = await session.execute(stmt)
+            all_mems = res.scalars().all()
+
+            scored = []
+            for mem in all_mems:
+                emb = mem.embedding
+                if isinstance(emb, str):
+                    try:
+                        emb = json.loads(emb)
+                    except Exception:
+                        emb = []
+                if emb and len(emb) == len(query_vec):
+                    dot = sum(a * b for a, b in zip(query_vec, emb))
+                    norm_q = sum(a * a for a in query_vec) ** 0.5
+                    norm_e = sum(b * b for b in emb) ** 0.5
+                    sim = dot / (norm_q * norm_e) if (norm_q and norm_e) else 0.0
+                    dist = 1.0 - sim
+                else:
+                    dist = 1.0
+                scored.append((mem, dist))
+
+            scored.sort(key=lambda x: x[1])
+            rows = scored[:top_k]
         else:
             # Using pgvector cosine distance operator <=>
             stmt = (
                 select(Memory, Memory.embedding.cosine_distance(query_vec).label("distance"))
                 .where(Memory.user_id == user_id)
             )
-        if memory_type:
-            stmt = stmt.where(Memory.memory_type == memory_type)
+            if memory_type:
+                stmt = stmt.where(Memory.memory_type == memory_type)
 
-        stmt = stmt.order_by(text("distance ASC")).limit(top_k)
-
-        res = await session.execute(stmt)
-        rows = res.all()
+            stmt = stmt.order_by(text("distance ASC")).limit(top_k)
+            res = await session.execute(stmt)
+            rows = res.all()
 
         memories = []
         for mem, distance in rows:

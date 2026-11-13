@@ -30,6 +30,17 @@ async def cleanup_db_pool():
 async def db_session():
     """Provides a fresh isolated async DB session with NullPool per test."""
     test_engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    if settings.DATABASE_URL.startswith("sqlite"):
+        from sqlalchemy import event
+        @event.listens_for(test_engine.sync_engine, "connect")
+        def _load_vec(dbapi_conn, rec):
+            try:
+                import sqlite_vec
+                dbapi_conn.enable_load_extension(True)
+                sqlite_vec.load(dbapi_conn)
+                dbapi_conn.enable_load_extension(False)
+            except Exception:
+                pass
     session_factory = async_sessionmaker(bind=test_engine, class_=AsyncSession, expire_on_commit=False)
 
     async with session_factory() as session:
