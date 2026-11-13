@@ -13,6 +13,17 @@ sys.path.insert(0, str(backend_path))
 
 from app.main import app
 from app.config import settings
+from app.database.session import engine
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def cleanup_db_pool():
+    """Ensures pooled asyncpg connections do not leak across pytest-asyncio event loops."""
+    yield
+    try:
+        await engine.dispose()
+    except Exception:
+        pass
 
 
 @pytest_asyncio.fixture

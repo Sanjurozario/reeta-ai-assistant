@@ -131,3 +131,30 @@ class AuditLogResponse(BaseModel):
     payload: Dict[str, Any]
     status: str
     timestamp: datetime
+
+
+# ============================================================================
+# Credential & Provider Schemas
+# ============================================================================
+
+class CredentialSetRequest(BaseModel):
+    provider: str = Field(default="openai", description="AI Provider name ('openai', 'anthropic', 'gemini')")
+    api_key: str = Field(..., min_length=1, description="API Key string")
+    model: Optional[str] = Field(default="gpt-4o", description="Default model (e.g. 'gpt-4o', 'gpt-4o-mini')")
+
+
+class CredentialStatusResponse(BaseModel):
+    configured: bool
+    provider: str
+    model: str
+    status: str  # 'live', 'mock', 'error'
+    status_detail: str
+    available_models: List[str] = []
+
+
+class CredentialTestResponse(BaseModel):
+    success: bool
+    provider: str
+    model: Optional[str] = None
+    latency_ms: Optional[int] = None
+    error: Optional[str] = None

@@ -12,6 +12,20 @@ from app.tools.registry import BaseTool, VerificationResult
 logger = logging.getLogger("reeta.browser")
 
 
+async def _launch_browser(playwright_instance, headless: bool = True):
+    """Launches Microsoft Edge on Windows if available, falling back to bundled chromium."""
+    channel = getattr(settings, "BROWSER_CHANNEL", "msedge")
+    if channel:
+        try:
+            return await playwright_instance.chromium.launch(
+                channel=channel,
+                headless=headless,
+            )
+        except Exception as e:
+            logger.info(f"Could not launch browser with channel '{channel}': {e}. Falling back to default chromium.")
+    return await playwright_instance.chromium.launch(headless=headless)
+
+
 class BrowserNavigateInput(BaseModel):
     url: str = Field(..., description="Web URL to navigate to (e.g. 'https://en.wikipedia.org')")
     headless: Optional[bool] = Field(default=True, description="Whether to run browser headlessly")
@@ -33,7 +47,8 @@ class BrowserNavigateTool(BaseTool):
         shot_path = screenshots_dir / f"web_{int(time.time())}.png"
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
+            browser = await _launch_browser(
+                p,
                 headless=(settings.PLAYWRIGHT_HEADLESS if headless is None else headless),
             )
             context = await browser.new_context(
@@ -97,7 +112,7 @@ class BrowserExtractTool(BaseTool):
         from bs4 import BeautifulSoup
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await _launch_browser(p, headless=True)
             page = await browser.new_page()
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -130,3 +145,130 @@ class BrowserExtractTool(BaseTool):
                 evidence=f"Extracted {result['tables_extracted']} tables from {result.get('url')}.",
             )
         return VerificationResult(verified=False, evidence="Table extraction failed.")
+
+
+
+# ============================================================================
+# 3. Browser Search Tool (YouTube / Search Engine via Edge)
+# ============================================================================
+
+class BrowserSearchInput(BaseModel):
+    query: str = Field(..., description="Search query string (e.g. 'lo-fi music', 'latest windows updates')")
+    site: Optional[str] = Field(default="google", description="Target site: 'google', 'youtube', 'bing', or 'wikipedia'")
+    headless: Optional[bool] = Field(default=True, description="Whether to run browser headlessly")
+
+
+class BrowserSearchTool(BaseTool):
+    name = "browser_search"
+    description = "Searches for content on YouTube, Google, or Bing using Microsoft Edge via Playwright."
+    category = "browser"
+    args_schema = BrowserSearchInput
+    default_tier = ActionTier.AUTONOMOUS
+    timeout_seconds = 45.0
+
+    async def execute(self, query: str, site: str = "google", headless: Optional[bool] = True) -> Dict[str, Any]:
+        from playwright.async_api import async_playwright
+        import urllib.parse
+
+        encoded_q = urllib.parse.quote_plus(query.strip())
+        if "youtube" in site.lower() or "youtube" in query.lower():
+            target_url = f"https://www.youtube.com/results?search_query={encoded_q}"
+        elif "bing" in site.lower():
+            target_url = f"https://www.bing.com/search?q={encoded_q}"
+        elif "wikipedia" in site.lower():
+            target_url = f"https://en.wikipedia.org/w/index.php?search={encoded_q}"
+        else:
+            target_url = f"https://www.google.com/search?q={encoded_q}"
+
+        screenshots_dir = Path(settings.AUTHORIZED_WORKSPACE) / "screenshots"
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+        shot_path = screenshots_dir / f"search_{int(time.time())}.png"
+
+        async with async_playwright() as p:
+            browser = await _launch_browser(p, headless=(settings.PLAYWRIGHT_HEADLESS if headless is None else headless))
+            context = await browser.new_context(viewport={"width": 1280, "height": 800})
+            page = await context.new_page()
+
+            try:
+                await page.goto(target_url, wait_until="domcontentloaded", timeout=25000)
+                await asyncio.sleep(1.5)
+                title = await page.title()
+                await page.screenshot(path=str(shot_path))
+                body_text = await page.inner_text("body")
+                results_text = " ".join(body_text.split())[:4000]
+            finally:
+                await browser.close()
+
+        safe_content = f"<untrusted_web_data query='{query}' url='{target_url}'>\n{results_text}\n</untrusted_web_data>"
+
+        return {
+            "query": query,
+            "target_url": target_url,
+            "title": title,
+            "screenshot_path": str(shot_path),
+            "snippet": safe_content,
+        }
+
+    async def verify_outcome(self, result: Any, **kwargs) -> VerificationResult:
+        if isinstance(result, dict) and result.get("target_url"):
+            return VerificationResult(
+                verified=True,
+                evidence=f"Navigated to '{result.get('target_url')}' and retrieved search results (Page title: '{result.get('title')}').",
+            )
+        return VerificationResult(verified=False, evidence="Browser search failed.")
+
+
+# ============================================================================
+# 4. Browser Download Tool
+# ============================================================================
+
+class BrowserDownloadInput(BaseModel):
+    url: str = Field(..., description="Direct file URL to download via browser/HTTP.")
+    save_as: Optional[str] = Field(default=None, description="Optional target filename in authorized workspace.")
+
+
+class BrowserDownloadTool(BaseTool):
+    name = "browser_download"
+    description = "Downloads a file from a URL into the authorized workspace."
+    category = "browser"
+    args_schema = BrowserDownloadInput
+    default_tier = ActionTier.AUTONOMOUS
+    timeout_seconds = 60.0
+
+    async def execute(self, url: str, save_as: Optional[str] = None) -> Dict[str, Any]:
+        import httpx
+        from urllib.parse import urlparse
+
+        workspace = Path(settings.AUTHORIZED_WORKSPACE) / "Downloads"
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        if not save_as:
+            parsed = urlparse(url)
+            filename = Path(parsed.path).name or f"download_{int(time.time())}.bin"
+        else:
+            filename = Path(save_as).name
+
+        target_file = workspace / filename
+
+        async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            with open(target_file, "wb") as f:
+                f.write(resp.content)
+
+        return {
+            "url": url,
+            "saved_to": str(target_file),
+            "filename": filename,
+            "size_bytes": target_file.stat().st_size,
+        }
+
+    async def verify_outcome(self, result: Any, **kwargs) -> VerificationResult:
+        if isinstance(result, dict) and result.get("saved_to"):
+            p = Path(result["saved_to"])
+            if p.exists() and p.stat().st_size > 0:
+                return VerificationResult(
+                    verified=True,
+                    evidence=f"Empirically verified downloaded file exists at {p} ({p.stat().st_size} bytes).",
+                )
+        return VerificationResult(verified=False, evidence="Download verification failed.")

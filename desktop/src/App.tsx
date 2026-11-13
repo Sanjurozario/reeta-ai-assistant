@@ -1,7 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAppStore } from './stores/useAppStore';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
+import { AtmosphereBackground } from './components/AtmosphereBackground';
+import { StartupSequence } from './components/StartupSequence';
 import { CommandCenter } from './pages/CommandCenter';
 import { LiveOperations } from './pages/LiveOperations';
 import { AgentWorkspace } from './pages/AgentWorkspace';
@@ -13,6 +15,7 @@ import { Settings } from './pages/Settings';
 
 export const App: React.FC = () => {
   const { activeScreen, init } = useAppStore();
+  const [showStartup, setShowStartup] = useState<boolean>(true);
 
   useEffect(() => {
     init();
@@ -42,16 +45,27 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-obsidian-950 text-slate-100 select-none font-sans">
-      {/* Sidebar Navigation */}
-      <Sidebar />
+    <div className="relative flex h-screen w-screen overflow-hidden bg-[#030508] text-slate-100 select-none font-sans">
+      {/* Cinematic Startup Boot Sequence */}
+      {showStartup && (
+        <StartupSequence onComplete={() => setShowStartup(false)} />
+      )}
 
-      {/* Main Execution Area */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden">
-        <Header />
-        <main className="flex-1 overflow-hidden flex flex-col">
-          {renderActiveScreen()}
-        </main>
+      {/* Atmospheric Ambient Lighting & Particle Canvas */}
+      <AtmosphereBackground />
+
+      {/* Main Glassmorphic Operating Interface */}
+      <div className="relative z-10 flex h-full w-full overflow-hidden">
+        {/* Sidebar Navigation */}
+        <Sidebar />
+
+        {/* Central Operating Workspace */}
+        <div className="flex-1 flex flex-col h-full overflow-hidden">
+          <Header onTriggerStartup={() => setShowStartup(true)} />
+          <main className="flex-1 overflow-hidden flex flex-col">
+            {renderActiveScreen()}
+          </main>
+        </div>
       </div>
     </div>
   );

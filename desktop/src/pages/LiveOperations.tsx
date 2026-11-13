@@ -1,10 +1,19 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useAppStore } from '../stores/useAppStore';
 import * as api from '../services/api';
-import { Activity, CheckCircle, Clock, XCircle, AlertTriangle, StopCircle, RefreshCw } from 'lucide-react';
+import { Activity, CheckCircle, Clock, XCircle, AlertTriangle, StopCircle, RefreshCw, ShieldAlert, ArrowRight } from 'lucide-react';
 
 export const LiveOperations: React.FC = () => {
-  const { activeTask, refreshTasks } = useAppStore();
+  const { activeTask, refreshTasks, setActiveScreen } = useAppStore();
+
+  useEffect(() => {
+    if (activeTask && (activeTask.status === 'running' || activeTask.status === 'planning')) {
+      const interval = setInterval(() => {
+        refreshTasks();
+      }, 2000);
+      return () => clearInterval(interval);
+    }
+  }, [activeTask?.status, refreshTasks]);
 
   const handleCancel = async () => {
     if (activeTask) {
@@ -15,7 +24,7 @@ export const LiveOperations: React.FC = () => {
 
   if (!activeTask) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center bg-obsidian-950 p-6 text-center">
+      <div className="flex-1 flex flex-col items-center justify-center bg-transparent p-6 text-center">
         <Activity className="w-12 h-12 text-slate-600 mb-3" />
         <h2 className="text-sm font-mono text-slate-300">NO ACTIVE OPERATION</h2>
         <p className="text-xs text-slate-500 mt-1">Submit an instruction in Command Center to initiate autonomous execution.</p>
@@ -25,38 +34,43 @@ export const LiveOperations: React.FC = () => {
 
   const steps = activeTask.steps || [];
   const completedSteps = steps.filter((s) => s.status === 'completed').length;
-  const progressPercent = steps.length > 0 ? Math.round((completedSteps / steps.length) * 100) : 0;
+  const progressPercent =
+    activeTask.status === 'completed'
+      ? 100
+      : steps.length > 0
+      ? Math.round((completedSteps / steps.length) * 100)
+      : 0;
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-obsidian-950 p-6 overflow-y-auto">
+    <div className="flex-1 flex flex-col h-full bg-transparent p-6 overflow-y-auto select-none">
       {/* Operation Header */}
-      <div className="border border-navy-800 rounded-xl bg-obsidian-900 p-5 mb-5 flex items-start justify-between">
+      <div className="border border-navy-800/80 rounded-2xl bg-[#070C18]/85 backdrop-blur-xl p-5 mb-5 flex items-start justify-between shadow-xl">
         <div>
           <div className="flex items-center gap-3">
             <h2 className="text-base font-bold font-mono text-slate-100">{activeTask.title}</h2>
             <span
               className={`text-[10px] font-mono px-2 py-0.5 rounded-full border uppercase ${
                 activeTask.status === 'completed'
-                  ? 'bg-reeta-success/10 text-reeta-success border-reeta-success/30'
+                  ? 'bg-reeta-success/15 text-reeta-success border-reeta-success/40'
                   : activeTask.status === 'running'
-                  ? 'bg-reeta-cyan/10 text-reeta-cyan border-reeta-cyan/30 animate-pulse'
+                  ? 'bg-reeta-cyan/15 text-reeta-cyan border-reeta-cyan/40 animate-pulse'
                   : activeTask.status === 'waiting_approval'
-                  ? 'bg-reeta-warning/10 text-reeta-warning border-reeta-warning/30'
+                  ? 'bg-reeta-warning/15 text-reeta-warning border-reeta-warning/40'
                   : activeTask.status === 'cancelled'
                   ? 'bg-slate-700/30 text-slate-400 border-slate-700'
-                  : 'bg-reeta-danger/10 text-reeta-danger border-reeta-danger/30'
+                  : 'bg-reeta-danger/15 text-reeta-danger border-reeta-danger/40'
               }`}
             >
               {activeTask.status.replace('_', ' ')}
             </span>
           </div>
-          <p className="text-xs text-slate-400 mt-1 max-w-2xl">{activeTask.objective}</p>
+          <p className="text-xs font-mono text-slate-400 mt-1 max-w-2xl">{activeTask.objective}</p>
         </div>
 
         <div className="flex items-center gap-2">
           <button
             onClick={refreshTasks}
-            className="p-2 rounded-lg bg-navy-900 hover:bg-navy-800 text-slate-300 border border-navy-800"
+            className="p-2 rounded-xl bg-navy-950/80 hover:bg-navy-900 text-slate-300 border border-navy-800 transition-colors"
             title="Refresh status"
           >
             <RefreshCw className="w-4 h-4" />
@@ -64,7 +78,7 @@ export const LiveOperations: React.FC = () => {
           {activeTask.status === 'running' && (
             <button
               onClick={handleCancel}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-reeta-danger/10 hover:bg-reeta-danger/20 text-reeta-danger border border-reeta-danger/30 text-xs font-semibold"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-reeta-danger/10 hover:bg-reeta-danger/25 text-reeta-danger border border-reeta-danger/40 text-xs font-semibold transition-all shadow-sm shadow-reeta-danger/10"
             >
               <StopCircle className="w-3.5 h-3.5" />
               <span>CANCEL TASK</span>
@@ -72,6 +86,43 @@ export const LiveOperations: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Security Approval Required Alert */}
+      {activeTask.status === 'waiting_approval' && (
+        <div className="mb-5 border border-reeta-warning/40 bg-reeta-warning/10 rounded-xl p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <ShieldAlert className="w-6 h-6 text-reeta-warning shrink-0" />
+            <div>
+              <h3 className="text-xs font-bold font-mono text-reeta-warning">SECURITY AUTHORIZATION REQUIRED</h3>
+              <p className="text-xs text-slate-300 mt-0.5">
+                This task has invoked a consequential operation requiring explicit operator approval under Zero-Trust policy.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setActiveScreen('permissions')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-reeta-warning/20 hover:bg-reeta-warning/30 text-reeta-warning border border-reeta-warning/40 text-xs font-semibold shrink-0"
+          >
+            <span>Review Ticket</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Task Failure Alert */}
+      {activeTask.status === 'failed' && (
+        <div className="mb-5 border border-reeta-danger/40 bg-reeta-danger/10 rounded-xl p-4 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-reeta-danger shrink-0 mt-0.5" />
+          <div>
+            <h3 className="text-xs font-bold font-mono text-reeta-danger">TASK EXECUTION HALTED</h3>
+            <p className="text-xs text-slate-300 mt-0.5">
+              {activeTask.error_detail?.error ||
+                activeTask.error_detail?.unhandled_exception ||
+                'Verification evidence did not satisfy required criteria. Execution was aborted safely.'}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Progress Bar */}
       <div className="mb-6 space-y-1.5">
@@ -101,12 +152,12 @@ export const LiveOperations: React.FC = () => {
           return (
             <div
               key={step.id || idx}
-              className={`p-4 rounded-xl border transition-all ${
+              className={`p-4 rounded-xl border backdrop-blur-md transition-all ${
                 isRunning
-                  ? 'bg-navy-950/80 border-reeta-cyan/40 shadow-sm shadow-reeta-cyan/10'
+                  ? 'bg-[#080E1E]/90 border-reeta-cyan/50 shadow-lg shadow-reeta-cyan/15 ring-1 ring-reeta-cyan/30'
                   : isDone
-                  ? 'bg-obsidian-900/60 border-navy-800'
-                  : 'bg-obsidian-900/30 border-navy-900 opacity-60'
+                  ? 'bg-[#070B16]/80 border-navy-800/80 hover:border-navy-700'
+                  : 'bg-[#050812]/50 border-navy-900/60 opacity-60'
               }`}
             >
               <div className="flex items-start justify-between">
@@ -151,3 +202,4 @@ export const LiveOperations: React.FC = () => {
     </div>
   );
 };
+

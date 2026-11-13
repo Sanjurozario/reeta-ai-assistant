@@ -145,7 +145,7 @@ class PermissionService:
                 status=ApprovalStatus.PENDING.value,
             )
             session.add(approval_record)
-            await session.flush()
+            await session.commit()
 
         await cls._record_audit(
             session=session,
@@ -178,9 +178,19 @@ class PermissionService:
         User approves or rejects a pending ticket.
         If approved, issues signed JWT token for the tool executor.
         """
+        # Match by approval_token or primary key UUID
         query = select(ApprovalRequest).where(ApprovalRequest.approval_token == ticket_id)
         result = await session.execute(query)
         record = result.scalar_one_or_none()
+
+        if not record:
+            try:
+                u = uuid.UUID(ticket_id)
+                query = select(ApprovalRequest).where(ApprovalRequest.id == u)
+                result = await session.execute(query)
+                record = result.scalar_one_or_none()
+            except Exception:
+                pass
 
         if not record:
             return {"success": False, "error": f"Ticket '{ticket_id}' not found."}
@@ -271,7 +281,7 @@ class PermissionService:
     @classmethod
     async def _record_audit(
         cls,
-        session: AsyncSession,
+        session: Optional[AsyncSession],
         actor: str,
         action_type: str,
         target_resource: str,
@@ -279,13 +289,14 @@ class PermissionService:
         user_id: Optional[uuid.UUID] = None,
         payload: Optional[Dict[str, Any]] = None,
     ):
-        audit = AuditLog(
-            user_id=user_id,
-            actor=actor,
-            action_type=action_type,
-            target_resource=target_resource,
-            status=status,
-            payload=payload or {},
-        )
-        session.add(audit)
-        await session.flush()
+        if session is not None:
+            audit = AuditLog(
+                user_id=user_id,
+                actor=actor,
+                action_type=action_type,
+                target_resource=target_resource,
+                status=status,
+                payload=payload or {},
+            )
+            session.add(audit)
+            await session.flush()

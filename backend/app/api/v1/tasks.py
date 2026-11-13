@@ -55,16 +55,12 @@ async def create_task(req: TaskCreateRequest, session: AsyncSession = Depends(ge
         conversation_id=req.conversation_id,
     )
 
-    # Initial plan step generation preserving Phase 2 contract
-    steps = [
-        {"step_number": 1, "title": "Analyze and decompose objective", "agent_type": "orchestrator"},
-        {"step_number": 2, "title": f"Execute '{req.title}'", "agent_type": "research"},
-        {"step_number": 3, "title": "Verify outcome and artifacts", "agent_type": "verification"},
-    ]
+    # Dynamic plan step generation based on objective intent
+    from app.core.orchestrator import orchestrator
+    steps = orchestrator.plan_steps_for_objective(req.objective, req.title)
     created_steps = await TaskManager.create_steps(session, task.id, steps)
 
     # Launch background LangGraph orchestration execution
-    from app.core.orchestrator import orchestrator
     cancel_event = asyncio.Event()
     bg_worker = asyncio.create_task(
         orchestrator.execute_task_async(

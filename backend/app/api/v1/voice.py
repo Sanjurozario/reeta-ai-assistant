@@ -48,7 +48,28 @@ async def synthesize_speech(req: SynthesizeRequest):
 
 @router.post("/interrupt")
 async def interrupt_speech():
+    from app.voice.native_audio import native_audio
+    native_audio.stop_speaking()
     return VoiceService.interrupt_speech()
+
+
+@router.post("/speak")
+async def speak_text(req: SynthesizeRequest):
+    from app.voice.native_audio import native_audio
+    native_audio.speak(req.text)
+    return {"status": "speaking", "text": req.text}
+
+
+@router.post("/toggle-mute")
+async def toggle_mute():
+    from app.voice.native_audio import native_audio
+    if native_audio.is_muted():
+        native_audio.unmute()
+        muted = False
+    else:
+        native_audio.mute()
+        muted = True
+    return {"status": "ok", "muted": muted}
 
 
 @router.post("/mode")
@@ -57,3 +78,4 @@ async def set_conversation_mode(req: ModeRequest):
         raise HTTPException(status_code=400, detail="Mode must be 'text' or 'voice'")
     new_mode = VoiceService.set_conversation_mode(req.mode)
     return {"status": "ok", "conversation_mode": new_mode}
+

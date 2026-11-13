@@ -65,6 +65,19 @@ class OpenAIProvider(BaseLLMProvider):
 
     def __init__(self):
         self._client = None
+        # Load from Windows Credential Manager if settings is empty
+        if not settings.OPENAI_API_KEY:
+            try:
+                import keyring
+                stored = keyring.get_password("REETA", "OPENAI_API_KEY")
+                if stored:
+                    settings.OPENAI_API_KEY = stored
+                    stored_m = keyring.get_password("REETA", "OPENAI_DEFAULT_MODEL")
+                    if stored_m:
+                        settings.OPENAI_DEFAULT_MODEL = stored_m
+            except Exception:
+                pass
+
         if self.is_configured():
             try:
                 from openai import AsyncOpenAI
@@ -74,6 +87,38 @@ class OpenAIProvider(BaseLLMProvider):
                 )
             except Exception as e:
                 logger.warning(f"Could not initialize OpenAI client: {e}")
+
+    def update_key(self, api_key: str, model: Optional[str] = None, base_url: Optional[str] = None):
+        settings.OPENAI_API_KEY = api_key
+        if model:
+            settings.OPENAI_DEFAULT_MODEL = model
+        if base_url:
+            settings.OPENAI_BASE_URL = base_url
+        from openai import AsyncOpenAI
+        self._client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=settings.OPENAI_BASE_URL,
+        )
+
+    def remove_key(self):
+        settings.OPENAI_API_KEY = ""
+        self._client = None
+
+    async def test_connection(self) -> Dict[str, Any]:
+        if not self._client or not self.is_configured():
+            return {"success": False, "error": "OpenAI API key not configured.", "provider": "openai"}
+        t0 = time.perf_counter()
+        try:
+            models = await asyncio.wait_for(self._client.models.list(), timeout=10.0)
+            ms = int((time.perf_counter() - t0) * 1000)
+            return {
+                "success": True,
+                "provider": "openai",
+                "model": settings.OPENAI_DEFAULT_MODEL,
+                "latency_ms": ms,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e), "provider": "openai"}
 
     @property
     def provider_name(self) -> str:
@@ -363,13 +408,34 @@ class MockTestingProvider(BaseLLMProvider):
         timeout_seconds: float = 5.0,
     ) -> GatewayResponse:
         last_msg = messages[-1].content if messages else "Hello"
+        lower_msg = last_msg.lower()
+
+        if "research" in lower_msg or "search" in lower_msg or "news" in lower_msg or "citations" in lower_msg:
+            content = (
+                "[REETA Mock Mode - Simulated Intelligence]\n"
+                "Executive Summary: Latest advancements in personal AI highlight breakthroughs in multi-agent orchestration, "
+                "local OS automation, and zero-trust permission boundaries.\n\n"
+                "Key Findings:\n"
+                "1. Autonomous execution engines utilize LangGraph state machines for deterministic task completion.\n"
+                "2. Zero-trust policy gates require human approval for consequential operating system actions.\n"
+                "3. Cognitive semantic memories backed by PostgreSQL pgvector enable persistent recall across independent sessions.\n\n"
+                "Verified Sources & Citations:\n"
+                "- https://news.ycombinator.com (Autonomous Systems Report 2026)\n"
+                "- https://en.wikipedia.org/wiki/Artificial_intelligence (State of Agent Architectures)\n"
+                "- https://python.org (Python 3.11 Runtime Benchmarks)"
+            )
+        elif "prefer" in lower_msg or "dark mode" in lower_msg:
+            content = "[REETA Mock Mode - Simulated Intelligence] User preference identified: Dark mode theme with high-contrast holographic cyan styling."
+        else:
+            content = f"[REETA Mock Mode - Simulated Intelligence] Successfully executed objective: '{last_msg[:60]}'."
+
         return GatewayResponse(
-            content=f"[REETA Mock Agent Response] Processed objective: '{last_msg}' successfully.",
+            content=content,
             provider="mock",
             model="reeta-mock-v1",
-            prompt_tokens=10,
-            completion_tokens=20,
-            latency_ms=12,
+            prompt_tokens=15,
+            completion_tokens=45,
+            latency_ms=10,
         )
 
 
@@ -412,6 +478,71 @@ class ModelGateway:
             }
         return status
 
+    async def get_active_provider_name(self) -> str:
+        """Determines the current functional active provider name."""
+        status = await self.get_active_providers_status()
+        pref = settings.DEFAULT_MODEL_PROVIDER.lower().strip()
+        if status.get(pref, {}).get("available"):
+            return pref
+        for p in ["openai", "anthropic", "gemini", "ollama", "mock"]:
+            if status.get(p, {}).get("available"):
+                return p
+        return "mock"
+
+    def update_openai_credentials(self, api_key: str, model: Optional[str] = None):
+        import keyring
+        try:
+            keyring.set_password("REETA", "OPENAI_API_KEY", api_key)
+            if model:
+                keyring.set_password("REETA", "OPENAI_DEFAULT_MODEL", model)
+        except Exception as e:
+            logger.warning(f"Could not persist to Windows Credential Manager: {e}")
+
+        prov = self._providers.get("openai")
+        if isinstance(prov, OpenAIProvider):
+            prov.update_key(api_key, model=model)
+        settings.DEFAULT_MODEL_PROVIDER = "openai"
+
+    def remove_openai_credentials(self):
+        import keyring
+        try:
+            keyring.delete_password("REETA", "OPENAI_API_KEY")
+        except Exception:
+            pass
+        try:
+            keyring.delete_password("REETA", "OPENAI_DEFAULT_MODEL")
+        except Exception:
+            pass
+        prov = self._providers.get("openai")
+        if isinstance(prov, OpenAIProvider):
+            prov.remove_key()
+        settings.DEFAULT_MODEL_PROVIDER = "mock"
+
+    async def get_credential_status(self) -> Dict[str, Any]:
+        prov = self._providers.get("openai")
+        has_key = bool(settings.OPENAI_API_KEY and len(settings.OPENAI_API_KEY) > 5)
+        active_name = await self.get_active_provider_name()
+
+        if has_key:
+            if isinstance(prov, OpenAIProvider) and await prov.is_available():
+                status = "live"
+                detail = f"Connected to OpenAI ({settings.OPENAI_DEFAULT_MODEL})"
+            else:
+                status = "error"
+                detail = "OpenAI API key configured, but ping failed. Check network or key validity."
+        else:
+            status = "mock"
+            detail = "Mock Provider active (Simulated intelligence for testing). Enter an OpenAI API key for live execution."
+
+        return {
+            "configured": has_key,
+            "provider": active_name,
+            "model": settings.OPENAI_DEFAULT_MODEL,
+            "status": status,
+            "status_detail": detail,
+            "available_models": ["gpt-4o", "gpt-4o-mini", "o1-mini", "o3-mini", "gpt-3.5-turbo"],
+        }
+
     async def generate_with_fallback(
         self,
         messages: List[GatewayMessage],
@@ -420,6 +551,7 @@ class ModelGateway:
         fallback_order: Optional[List[str]] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        task_id: Optional[str] = None,
     ) -> GatewayResponse:
         """
         Attempts execution using preferred provider.
@@ -443,16 +575,29 @@ class ModelGateway:
                 continue
 
             try:
-                logger.info(f"Dispatching query to model provider '{candidate_name}'")
+                target_m = preferred_model if candidate_name == primary else None
+                logger.info(
+                    f"[Task {task_id or 'global'}] [LLM Gateway] Dispatching to '{candidate_name}' "
+                    f"(model={target_m or 'default'})"
+                )
+                t_start = time.perf_counter()
                 response = await prov.generate(
                     messages=messages,
-                    model=preferred_model if candidate_name == primary else None,
+                    model=target_m,
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
+                elapsed_ms = int((time.perf_counter() - t_start) * 1000)
+                logger.info(
+                    f"[Task {task_id or 'global'}] [LLM Gateway] Provider '{candidate_name}' succeeded in "
+                    f"{elapsed_ms}ms (tokens: prompt={response.prompt_tokens}, completion={response.completion_tokens})"
+                )
                 return response
             except Exception as e:
-                logger.warning(f"Provider '{candidate_name}' generation failed: {e}. Cascading to fallback.")
+                logger.warning(
+                    f"[Task {task_id or 'global'}] [LLM Gateway] Provider '{candidate_name}' generation failed: "
+                    f"{type(e).__name__}: {e}. Cascading to fallback."
+                )
                 last_error = e
 
         raise RuntimeError(f"All model providers failed or are unconfigured. Last error: {last_error}")

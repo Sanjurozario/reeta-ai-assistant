@@ -20,6 +20,7 @@ class OrchestratorState(TypedDict):
     objective: str
     steps: List[Dict[str, Any]]
     current_step_idx: int
+    retry_count: int
     artifacts: List[Dict[str, Any]]
     status: str
     is_cancelled: bool
@@ -46,7 +47,16 @@ class CentralOrchestrator:
         builder.set_entry_point("plan_task")
 
         builder.add_edge("plan_task", "execute_step")
-        builder.add_edge("execute_step", "verify_step")
+
+        builder.add_conditional_edges(
+            "execute_step",
+            self._route_after_execute,
+            {
+                "verify": "verify_step",
+                "halt_approval": END,
+                "abort_cancelled": "finalize_task",
+            },
+        )
 
         builder.add_conditional_edges(
             "verify_step",
@@ -56,11 +66,125 @@ class CentralOrchestrator:
                 "finalize": "finalize_task",
                 "halt_approval": END,
                 "abort_cancelled": "finalize_task",
+                "abort_failed": "finalize_task",
             },
         )
 
         builder.add_edge("finalize_task", END)
         return builder.compile()
+
+    # ========================================================================
+    # Static Planning Decomposition
+    # ========================================================================
+
+    @classmethod
+    def plan_steps_for_objective(cls, objective: str, title: str = "") -> List[Dict[str, Any]]:
+        """Determines ordered steps and assigned worker agents for a given objective."""
+        text = f"{title} {objective}".lower()
+
+        # 1. Deletion / Recycle Bin (DEMO 4)
+        if "delete" in text or "remove file" in text or "trash" in text:
+            return [
+                {"step_number": 1, "title": "Delete file and transfer to Windows Recycle Bin", "agent_type": "file"},
+                {"step_number": 2, "title": "Empirically verify file is removed from disk location", "agent_type": "file"},
+            ]
+
+        # 2. Directory Creation + File Placement (DEMO 2)
+        elif ("create a folder" in text or "create folder" in text or "folder called" in text or "directory called" in text or "projects/test" in text) and ("file" in text or "notes" in text):
+            return [
+                {"step_number": 1, "title": "Create directory structure in authorized workspace", "agent_type": "file"},
+                {"step_number": 2, "title": "Create and write file inside folder", "agent_type": "file"},
+                {"step_number": 3, "title": "Empirically verify directory and file exist on disk", "agent_type": "file"},
+            ]
+
+        # 3. Windows Notepad Launch & Keystroke Input (DEMO 1)
+        elif "notepad" in text and ("write" in text or "type" in text or "note" in text or "say" in text or "hello" in text):
+            return [
+                {"step_number": 1, "title": "Launch Windows Notepad application", "agent_type": "computer"},
+                {"step_number": 2, "title": "Type greeting note into active Notepad window", "agent_type": "computer"},
+                {"step_number": 3, "title": "Inspect open windows and verify active UI", "agent_type": "computer"},
+            ]
+
+        # 4. Coding Task: Script Creation, Execution, & Output Capture (DEMO 6)
+        elif ("python script" in text or "create a script" in text or "create script" in text or "run script" in text or "small script" in text or ("script" in text and "output" in text)):
+            return [
+                {"step_number": 1, "title": "Create Python script in authorized workspace", "agent_type": "coding"},
+                {"step_number": 2, "title": "Execute script and capture real stdout output", "agent_type": "coding"},
+                {"step_number": 3, "title": "Empirically verify script execution and output", "agent_type": "coding"},
+            ]
+
+        # 5. Generic File Creation (Write, Temp, .txt)
+        elif "file" in text or "write" in text or "create text" in text or "temp" in text or ".txt" in text:
+            return [
+                {"step_number": 1, "title": f"Create and write file content for '{title or objective[:30]}'", "agent_type": "file"},
+                {"step_number": 2, "title": "Empirically verify file existence and contents on disk", "agent_type": "file"},
+            ]
+
+        # 6. Web Research with Summarization & Citations (DEMO 3)
+        elif ("search" in text or "research" in text or "news" in text) and ("web" in text or "summarise" in text or "summarize" in text or "source" in text or "topic" in text):
+            return [
+                {"step_number": 1, "title": "Search web for latest news and gather source citations", "agent_type": "research"},
+                {"step_number": 2, "title": "Synthesize research summary with explicit URL citations", "agent_type": "research"},
+            ]
+
+        # 7. Cognitive Semantic Memory (DEMO 5)
+        elif "prefer" in text or "remember" in text or "preference" in text or "memory" in text:
+            if "what" in text or "tell me" in text or "recall" in text or "show" in text:
+                return [
+                    {"step_number": 1, "title": "Retrieve semantic preference from pgvector memory and synthesize answer", "agent_type": "memory"},
+                ]
+            else:
+                return [
+                    {"step_number": 1, "title": "Store user preference in cognitive pgvector memory", "agent_type": "memory"},
+                ]
+
+        # 8. PDF Report Generation
+        elif "pdf" in text or "report" in text:
+            return [
+                {"step_number": 1, "title": f"Gather research data on '{title or objective[:30]}'", "agent_type": "research"},
+                {"step_number": 2, "title": "Synthesize report and generate PDF document", "agent_type": "file"},
+            ]
+
+        # 9. Folder Organization
+        elif "organize" in text or "clean" in text:
+            return [
+                {"step_number": 1, "title": "Scan directory and discover files", "agent_type": "file"},
+                {"step_number": 2, "title": "Batch categorize and organize into folders", "agent_type": "file"},
+            ]
+
+        # 10. Generic Windows Desktop Applications
+        elif "app" in text or "open" in text or "calc" in text:
+            return [
+                {"step_number": 1, "title": f"Launch target application for '{title or objective[:30]}'", "agent_type": "computer"},
+                {"step_number": 2, "title": "Inspect open windows and verify active UI", "agent_type": "computer"},
+            ]
+
+        # 11. Code Search & Testing
+        elif "bug" in text or "pytest" in text or ("test" in text and ("suite" in text or "unit" in text or "run test" in text or "test suite" in text)):
+            return [
+                {"step_number": 1, "title": "Search codebase for target symbol or bug", "agent_type": "coding"},
+                {"step_number": 2, "title": "Execute test suite to confirm baseline", "agent_type": "coding"},
+            ]
+
+        # 12. Browser Automation
+        elif "browse" in text or "http" in text or "website" in text or "extract" in text or "wikipedia" in text:
+            return [
+                {"step_number": 1, "title": f"Navigate to website and capture page context", "agent_type": "browser"},
+                {"step_number": 2, "title": "Extract structured information from page", "agent_type": "browser"},
+            ]
+
+        # 13. Reminders & Scheduling
+        elif "remind" in text or "schedule" in text:
+            return [
+                {"step_number": 1, "title": f"Create scheduled reminder for '{title or objective[:30]}'", "agent_type": "productivity"},
+            ]
+
+        # 14. Fallback Direct Synthesis
+        else:
+            return [
+                {"step_number": 1, "title": f"Analyze and decompose requirements for '{title or objective[:30]}'", "agent_type": "research"},
+                {"step_number": 2, "title": "Synthesize response and verify task completion", "agent_type": "research"},
+            ]
 
     # ========================================================================
     # Graph Nodes
@@ -72,65 +196,60 @@ class CentralOrchestrator:
         task_id = state["task_id"]
         logger.info(f"Orchestrator planning task {task_id}: '{objective}'")
 
-        # Decompose using rule-based and intent analysis
-        obj_lower = objective.lower()
-        steps = []
+        steps: List[Dict[str, Any]] = []
 
-        if "pdf" in obj_lower or "report" in obj_lower:
-            steps = [
-                {"step_number": 1, "title": f"Gather research data on '{objective}'", "agent_type": "research"},
-                {"step_number": 2, "title": "Synthesize report and generate PDF document", "agent_type": "file"},
-            ]
-        elif "organize" in obj_lower or "clean" in obj_lower:
-            steps = [
-                {"step_number": 1, "title": "Scan directory and discover files", "agent_type": "file"},
-                {"step_number": 2, "title": "Batch categorize and organize into folders", "agent_type": "file"},
-            ]
-        elif "app" in obj_lower or "open" in obj_lower or "notepad" in obj_lower or "calc" in obj_lower:
-            steps = [
-                {"step_number": 1, "title": f"Launch target application for '{objective}'", "agent_type": "computer"},
-                {"step_number": 2, "title": "Inspect open windows and verify active UI", "agent_type": "computer"},
-            ]
-        elif "bug" in obj_lower or "code" in obj_lower or "test" in obj_lower:
-            steps = [
-                {"step_number": 1, "title": "Search codebase for target symbol or bug", "agent_type": "coding"},
-                {"step_number": 2, "title": "Execute test suite to confirm baseline", "agent_type": "coding"},
-            ]
-        elif "browse" in obj_lower or "http" in obj_lower or "website" in obj_lower or "extract" in obj_lower:
-            steps = [
-                {"step_number": 1, "title": f"Navigate to website and capture page context", "agent_type": "browser"},
-                {"step_number": 2, "title": "Extract structured information from page", "agent_type": "browser"},
-            ]
-        elif "remind" in obj_lower or "schedule" in obj_lower:
-            steps = [
-                {"step_number": 1, "title": f"Create scheduled reminder for '{objective}'", "agent_type": "productivity"},
-            ]
-        else:
-            steps = [
-                {"step_number": 1, "title": "Analyze request and research context", "agent_type": "research"},
-                {"step_number": 2, "title": "Execute objective operations", "agent_type": "file"},
-            ]
-
-        # Record steps in DB and notify UI
+        # Record or synchronize steps in DB and notify UI
         async with async_session_factory() as session:
             existing = await TaskManager.get_task(session, uuid.UUID(task_id))
             if existing and existing.steps and len(existing.steps) > 0:
+                is_placeholder = any(s.title == "Analyze and decompose objective" for s in existing.steps)
+                if is_placeholder:
+                    # Replace placeholder with domain-specific decomposition
+                    real_steps = self.plan_steps_for_objective(objective, existing.title)
+                    for old_s in list(existing.steps):
+                        await session.delete(old_s)
+                    await session.flush()
+                    created = await TaskManager.create_steps(session, uuid.UUID(task_id), real_steps)
+                    steps = [
+                        {
+                            "id": str(s.id),
+                            "step_number": s.step_number,
+                            "title": s.title,
+                            "agent_type": s.agent_type,
+                            "input_payload": s.input_payload or {},
+                        }
+                        for s in created
+                    ]
+                else:
+                    steps = [
+                        {
+                            "id": str(s.id),
+                            "step_number": s.step_number,
+                            "title": s.title,
+                            "agent_type": s.agent_type,
+                            "input_payload": s.input_payload or {},
+                        }
+                        for s in sorted(existing.steps, key=lambda x: x.step_number)
+                    ]
+            else:
+                real_steps = self.plan_steps_for_objective(objective)
+                created = await TaskManager.create_steps(session, uuid.UUID(task_id), real_steps)
                 steps = [
                     {
+                        "id": str(s.id),
                         "step_number": s.step_number,
                         "title": s.title,
                         "agent_type": s.agent_type,
                         "input_payload": s.input_payload or {},
                     }
-                    for s in sorted(existing.steps, key=lambda x: x.step_number)
+                    for s in created
                 ]
-            else:
-                await TaskManager.create_steps(session, uuid.UUID(task_id), steps)
             await TaskManager.update_task_status(session, uuid.UUID(task_id), TaskStatus.RUNNING)
 
         return {
             "steps": steps,
             "current_step_idx": 0,
+            "retry_count": 0,
             "status": "running",
         }
 
@@ -147,6 +266,14 @@ class CentralOrchestrator:
         current_step = steps[idx]
         agent_type = current_step.get("agent_type", "research")
         agent = get_agent(agent_type)
+        step_id = current_step.get("id")
+
+        if step_id:
+            try:
+                async with async_session_factory() as session:
+                    await TaskManager.update_step_status(session, uuid.UUID(step_id), TaskStatus.RUNNING)
+            except Exception as e:
+                logger.warning(f"Could not mark step {step_id} running in DB: {e}")
 
         await broadcaster.broadcast(
             event="step_started",
@@ -167,10 +294,17 @@ class CentralOrchestrator:
                 task_id=uuid.UUID(task_id),
                 user_id=uuid.UUID(state["user_id"]),
             )
+            await session.commit()
 
         # Handle Tier 2 Approval interruption
         if step_result.requires_approval:
             logger.info(f"Task {task_id} halted: Ticket {step_result.ticket_id} requires approval.")
+            try:
+                async with async_session_factory() as session:
+                    await TaskManager.update_task_status(session, uuid.UUID(task_id), TaskStatus.WAITING_APPROVAL)
+            except Exception as e:
+                logger.warning(f"Could not mark task {task_id} waiting_approval in DB: {e}")
+
             await broadcaster.broadcast(
                 event="approval_required",
                 task_id=task_id,
@@ -188,11 +322,25 @@ class CentralOrchestrator:
 
         # Store artifacts if produced
         artifacts = list(state.get("artifacts", []))
+        context = dict(state.get("context", {}))
         if isinstance(step_result.output, dict):
             if "pdf_path" in step_result.output:
                 artifacts.append({"type": "pdf", "path": step_result.output["pdf_path"]})
             if "screenshot_path" in step_result.output:
                 artifacts.append({"type": "screenshot", "path": step_result.output["screenshot_path"]})
+            if "filepath" in step_result.output:
+                context["last_created_file"] = step_result.output["filepath"]
+                context["filepath"] = step_result.output["filepath"]
+                from app.memory.store import MemoryService
+                MemoryService.set_working_memory_key("global", "last_created_file", step_result.output["filepath"])
+            if "directory_path" in step_result.output:
+                context["last_created_directory"] = step_result.output["directory_path"]
+                from app.memory.store import MemoryService
+                MemoryService.set_working_memory_key("global", "last_created_directory", step_result.output["directory_path"])
+            if "script" in step_result.output:
+                context["last_created_script"] = step_result.output["script"]
+                from app.memory.store import MemoryService
+                MemoryService.set_working_memory_key("global", "last_created_script", step_result.output["script"])
 
         current_step["result"] = step_result.output
         current_step["verified"] = step_result.verified
@@ -201,6 +349,7 @@ class CentralOrchestrator:
         return {
             "steps": steps,
             "artifacts": artifacts,
+            "context": context,
             "status": "step_executed",
         }
 
@@ -209,6 +358,7 @@ class CentralOrchestrator:
         idx = state["current_step_idx"]
         current_step = state["steps"][idx]
         task_id = state["task_id"]
+        step_id = current_step.get("id")
 
         is_verified = current_step.get("verified", False)
         evidence = current_step.get("evidence", "No evidence recorded.")
@@ -225,18 +375,68 @@ class CentralOrchestrator:
             },
         )
 
-        return {
-            "current_step_idx": idx + 1 if is_verified else idx,
-            "status": "step_verified" if is_verified else "verification_failed",
-        }
+        if is_verified:
+            if step_id:
+                try:
+                    async with async_session_factory() as session:
+                        await TaskManager.update_step_status(
+                            session,
+                            uuid.UUID(step_id),
+                            TaskStatus.COMPLETED,
+                            output_payload=current_step.get("result", {}),
+                        )
+                except Exception as e:
+                    logger.warning(f"Could not update step {step_id} completed in DB: {e}")
+
+            return {
+                "current_step_idx": idx + 1,
+                "retry_count": 0,
+                "status": "step_verified",
+            }
+        else:
+            retries = state.get("retry_count", 0) + 1
+            if retries > 1:
+                # Max retries exceeded: abort execution cleanly
+                logger.error(f"Task {task_id} Step {idx + 1} failed verification after {retries} attempts.")
+                if step_id:
+                    try:
+                        async with async_session_factory() as session:
+                            await TaskManager.update_step_status(
+                                session,
+                                uuid.UUID(step_id),
+                                TaskStatus.FAILED,
+                                error_log=f"Verification failed: {evidence}",
+                            )
+                    except Exception as e:
+                        logger.warning(f"Could not update step {step_id} failed in DB: {e}")
+
+                return {
+                    "retry_count": retries,
+                    "status": "failed",
+                    "error": f"Step {idx + 1} ('{current_step['title']}') failed verification: {evidence}",
+                }
+
+            return {
+                "current_step_idx": idx,
+                "retry_count": retries,
+                "status": "verification_failed",
+            }
 
     async def _node_finalize_task(self, state: OrchestratorState) -> Dict[str, Any]:
         """Updates final task status in database and broadcasts completion event."""
         task_id = state["task_id"]
-        final_status = TaskStatus.COMPLETED if state.get("current_step_idx", 0) >= len(state.get("steps", [])) else TaskStatus.FAILED
+        is_cancelled = state.get("is_cancelled", False)
+        has_error = bool(state.get("error"))
+        all_done = state.get("current_step_idx", 0) >= len(state.get("steps", []))
 
-        if state.get("is_cancelled"):
+        if is_cancelled:
             final_status = TaskStatus.CANCELLED
+        elif all_done and not has_error:
+            final_status = TaskStatus.COMPLETED
+        else:
+            final_status = TaskStatus.FAILED
+
+        error_detail = {"error": state.get("error")} if state.get("error") else None
 
         async with async_session_factory() as session:
             await TaskManager.update_task_status(
@@ -244,16 +444,26 @@ class CentralOrchestrator:
                 task_id=uuid.UUID(task_id),
                 status=final_status,
                 result={"artifacts": state.get("artifacts", []), "steps": state.get("steps", [])},
+                error_detail=error_detail,
             )
 
         logger.info(f"Task {task_id} finalized with status: {final_status.value}")
         return {"status": final_status.value}
+
+    def _route_after_execute(self, state: OrchestratorState) -> str:
+        if state.get("is_cancelled"):
+            return "abort_cancelled"
+        if state.get("requires_approval"):
+            return "halt_approval"
+        return "verify"
 
     def _route_after_step(self, state: OrchestratorState) -> str:
         if state.get("is_cancelled"):
             return "abort_cancelled"
         if state.get("requires_approval"):
             return "halt_approval"
+        if state.get("status") == "failed" or state.get("error"):
+            return "abort_failed"
 
         idx = state["current_step_idx"]
         total = len(state.get("steps", []))
@@ -268,13 +478,14 @@ class CentralOrchestrator:
         objective: str,
         context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Entry point to launch task orchestration."""
+        """Entry point to launch task orchestration with resilient error containment."""
         initial_state: OrchestratorState = {
             "task_id": str(task_id),
             "user_id": str(user_id),
             "objective": objective,
             "steps": [],
             "current_step_idx": 0,
+            "retry_count": 0,
             "artifacts": [],
             "status": "pending",
             "is_cancelled": False,
@@ -283,7 +494,21 @@ class CentralOrchestrator:
             "error": None,
             "context": context or {},
         }
-        return await self.graph.ainvoke(initial_state)
+        try:
+            return await self.graph.ainvoke(initial_state)
+        except Exception as e:
+            logger.exception(f"Unhandled error during task {task_id} orchestration: {e}")
+            try:
+                async with async_session_factory() as session:
+                    await TaskManager.update_task_status(
+                        session=session,
+                        task_id=task_id,
+                        status=TaskStatus.FAILED,
+                        error_detail={"unhandled_exception": str(e)},
+                    )
+            except Exception as dbe:
+                logger.error(f"Failed to record task failure for {task_id}: {dbe}")
+            return {"status": "failed", "error": str(e)}
 
 
 # Global Orchestrator Singleton

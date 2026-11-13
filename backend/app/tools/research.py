@@ -73,3 +73,4 @@ class WebSearchTool(BaseTool):
                 evidence=f"Retrieved {len(result['results'])} search results for '{result.get('query')}'.",
             )
         return VerificationResult(verified=False, evidence="Search returned zero results.")
+

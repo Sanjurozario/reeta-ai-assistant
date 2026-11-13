@@ -6,6 +6,7 @@ from app.agents.workers import (
     BrowserAgent,
     FileAgent,
     ProductivityAgent,
+    MemoryAgent,
 )
 
 # Active Specialized Worker Registry
@@ -16,6 +17,7 @@ _agents = {
     "browser": BrowserAgent(),
     "file": FileAgent(),
     "productivity": ProductivityAgent(),
+    "memory": MemoryAgent(),
 }
 
 
@@ -34,5 +36,7 @@ __all__ = [
     "BrowserAgent",
     "FileAgent",
     "ProductivityAgent",
+    "MemoryAgent",
     "get_agent",
 ]
+

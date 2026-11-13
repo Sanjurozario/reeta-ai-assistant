@@ -74,6 +74,75 @@ async def search_memories(req: SearchMemoryRequest, session: AsyncSession = Depe
     return results
 
 
+@router.get("")
+async def list_memories(
+    limit: int = 50,
+    memory_type: Optional[str] = None,
+    session: AsyncSession = Depends(get_db),
+):
+    """Retrieves all stored cognitive memories for the active user."""
+    user = await _get_or_create_default_user(session)
+    return await MemoryService.list_memories(
+        session=session,
+        user_id=user.id,
+        limit=limit,
+        memory_type=memory_type,
+    )
+
+
+@router.delete("/{memory_id}")
+async def delete_memory(memory_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
+    """Deletes a memory record permanently."""
+    success = await MemoryService.delete_memory(session=session, memory_id=memory_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Memory record not found.")
+    return {"success": True, "message": "Memory removed from pgvector repository."}
+
+
+class UpdateMemoryRequest(BaseModel):
+    content: str = Field(..., description="Updated memory text")
+
+
+@router.patch("/{memory_id}")
+async def update_memory(
+    memory_id: uuid.UUID,
+    req: UpdateMemoryRequest,
+    session: AsyncSession = Depends(get_db),
+):
+    """Updates memory text and regenerates embedding."""
+    updated = await MemoryService.update_memory(
+        session=session,
+        memory_id=memory_id,
+        content=req.content,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Memory record not found.")
+    return updated
+
+
+class ForgetMemoryRequest(BaseModel):
+    query: str = Field(..., description="Semantic query of memory to forget (e.g. 'dark mode preference')")
+
+
+@router.post("/forget")
+async def forget_memory(req: ForgetMemoryRequest, session: AsyncSession = Depends(get_db)):
+    """Removes closest matching semantic memory based on natural language query."""
+    user = await _get_or_create_default_user(session)
+    forgotten = await MemoryService.delete_matching_memory(
+        session=session,
+        user_id=user.id,
+        query=req.query,
+    )
+    if not forgotten:
+        return {"forgotten": False, "message": f"No memory found closely matching '{req.query}'."}
+    return {
+        "forgotten": True,
+        "message": f"Successfully forgot: '{forgotten}'",
+        "content": forgotten,
+    }
+
+
 @router.get("/working/{task_id}")
 async def get_working_memory(task_id: str):
     return {"task_id": task_id, "data": MemoryService.get_working_memory(task_id)}
+

@@ -1,12 +1,20 @@
 import asyncio
 import time
 from datetime import datetime, timezone
+from typing import Optional
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.schemas import HealthResponse, EmergencyStopResponse, ModelStatusResponse
+from app.api.schemas import (
+    HealthResponse,
+    EmergencyStopResponse,
+    ModelStatusResponse,
+    CredentialSetRequest,
+    CredentialStatusResponse,
+    CredentialTestResponse,
+)
 from app.config import settings
-from app.core.gateway import model_gateway
+from app.core.gateway import model_gateway, OpenAIProvider
 from app.core.tasks import TaskManager, broadcaster
 from app.database.session import check_db_health, get_db
 
@@ -18,11 +26,12 @@ _boot_time = time.time()
 async def get_health():
     """Returns system status, DB connectivity, and active reasoning engine."""
     db_ok = await check_db_health()
+    active_prov = await model_gateway.get_active_provider_name()
     return HealthResponse(
         status="healthy" if db_ok else "degraded",
         version="1.0.0",
         database="connected" if db_ok else "disconnected",
-        active_provider=settings.DEFAULT_MODEL_PROVIDER,
+        active_provider=active_prov,
         uptime_seconds=round(time.time() - _boot_time, 2),
         timestamp=datetime.now(timezone.utc),
     )
@@ -69,3 +78,53 @@ async def get_models():
         default_provider=settings.DEFAULT_MODEL_PROVIDER,
         providers=status,
     )
+
+
+@router.get("/credentials", response_model=CredentialStatusResponse)
+async def get_credentials():
+    """Returns honest status of the active AI provider and Windows Credential Manager."""
+    data = await model_gateway.get_credential_status()
+    return CredentialStatusResponse(**data)
+
+
+@router.post("/credentials", response_model=CredentialStatusResponse)
+async def set_credentials(req: CredentialSetRequest):
+    """Saves AI API credentials to Windows Credential Manager and applies immediately."""
+    model_gateway.update_openai_credentials(api_key=req.api_key.strip(), model=req.model)
+    data = await model_gateway.get_credential_status()
+    return CredentialStatusResponse(**data)
+
+
+@router.post("/credentials/test", response_model=CredentialTestResponse)
+async def test_credentials(req: Optional[CredentialSetRequest] = None):
+    """Performs live connection test against OpenAI provider."""
+    if req and req.api_key:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=req.api_key.strip(), base_url=settings.OPENAI_BASE_URL)
+        t0 = time.perf_counter()
+        try:
+            await asyncio.wait_for(client.models.list(), timeout=10.0)
+            latency = int((time.perf_counter() - t0) * 1000)
+            return CredentialTestResponse(success=True, provider="openai", model=req.model or "gpt-4o", latency_ms=latency)
+        except Exception as e:
+            return CredentialTestResponse(success=False, provider="openai", error=str(e))
+    else:
+        prov = model_gateway.get_provider("openai")
+        if isinstance(prov, OpenAIProvider):
+            res = await prov.test_connection()
+            return CredentialTestResponse(
+                success=res.get("success", False),
+                provider="openai",
+                model=res.get("model"),
+                latency_ms=res.get("latency_ms"),
+                error=res.get("error"),
+            )
+        return CredentialTestResponse(success=False, provider="openai", error="OpenAI provider not available")
+
+
+@router.delete("/credentials", response_model=CredentialStatusResponse)
+async def remove_credentials():
+    """Removes AI API credentials from Windows Credential Manager and reverts to mock mode."""
+    model_gateway.remove_openai_credentials()
+    data = await model_gateway.get_credential_status()
+    return CredentialStatusResponse(**data)

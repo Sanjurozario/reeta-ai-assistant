@@ -145,3 +145,4 @@ export const AgentWorkspace: React.FC = () => {
     </div>
   );
 };
+

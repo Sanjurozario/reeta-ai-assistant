@@ -115,11 +115,22 @@ class MemoryService:
         """
         query_vec = await cls.compute_embedding(query, dimension=settings.EMBEDDING_DIMENSION)
 
-        # Using pgvector cosine distance operator <=>
-        stmt = (
-            select(Memory, Memory.embedding.cosine_distance(query_vec).label("distance"))
-            .where(Memory.user_id == user_id)
-        )
+        # Dual database support: SQLite with sqlite-vec vs PostgreSQL with pgvector
+        is_sqlite = (session.bind.dialect.name == "sqlite") if session.bind else settings.DATABASE_URL.startswith("sqlite")
+
+        if is_sqlite:
+            from sqlalchemy import func
+            q_json = json.dumps(query_vec)
+            stmt = (
+                select(Memory, func.vec_distance_cosine(Memory.embedding, q_json).label("distance"))
+                .where(Memory.user_id == user_id)
+            )
+        else:
+            # Using pgvector cosine distance operator <=>
+            stmt = (
+                select(Memory, Memory.embedding.cosine_distance(query_vec).label("distance"))
+                .where(Memory.user_id == user_id)
+            )
         if memory_type:
             stmt = stmt.where(Memory.memory_type == memory_type)
 
@@ -145,3 +156,79 @@ class MemoryService:
 
         await session.commit()
         return memories
+
+    @classmethod
+    async def list_memories(
+        cls,
+        session: AsyncSession,
+        user_id: uuid.UUID,
+        limit: int = 50,
+        memory_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Returns ordered list of persisted user memories."""
+        stmt = select(Memory).where(Memory.user_id == user_id)
+        if memory_type:
+            stmt = stmt.where(Memory.memory_type == memory_type)
+        stmt = stmt.order_by(desc(Memory.created_at)).limit(limit)
+
+        res = await session.execute(stmt)
+        memories = res.scalars().all()
+
+        return [
+            {
+                "id": str(m.id),
+                "content": m.content,
+                "memory_type": m.memory_type,
+                "category": m.category,
+                "importance_score": m.importance_score,
+                "access_count": m.access_count,
+                "created_at": m.created_at.isoformat(),
+            }
+            for m in memories
+        ]
+
+    @classmethod
+    async def delete_memory(cls, session: AsyncSession, memory_id: uuid.UUID) -> bool:
+        """Deletes a specific memory record by ID."""
+        stmt = select(Memory).where(Memory.id == memory_id)
+        res = await session.execute(stmt)
+        mem = res.scalar_one_or_none()
+        if mem:
+            await session.delete(mem)
+            await session.commit()
+            logger.info(f"Deleted cognitive memory record: {memory_id}")
+            return True
+        return False
+
+    @classmethod
+    async def update_memory(cls, session: AsyncSession, memory_id: uuid.UUID, content: str) -> Optional[Dict[str, Any]]:
+        """Updates text content and recomputes pgvector embedding."""
+        stmt = select(Memory).where(Memory.id == memory_id)
+        res = await session.execute(stmt)
+        mem = res.scalar_one_or_none()
+        if not mem:
+            return None
+
+        mem.content = content
+        mem.embedding = await cls.compute_embedding(content, dimension=settings.EMBEDDING_DIMENSION)
+        mem.updated_at = datetime.now(timezone.utc)
+        await session.commit()
+        await session.refresh(mem)
+        logger.info(f"Updated memory {memory_id} and refreshed vector embedding.")
+        return {
+            "id": str(mem.id),
+            "content": mem.content,
+            "memory_type": mem.memory_type,
+            "category": mem.category,
+            "updated_at": mem.updated_at.isoformat(),
+        }
+
+    @classmethod
+    async def delete_matching_memory(cls, session: AsyncSession, user_id: uuid.UUID, query: str) -> Optional[str]:
+        """Finds closest matching semantic memory and removes it ('forget this' command)."""
+        matches = await cls.search_memories(session=session, user_id=user_id, query=query, top_k=1)
+        if matches and matches[0].get("similarity_score", 0) > 0.4:
+            target_id = uuid.UUID(matches[0]["id"])
+            await cls.delete_memory(session=session, memory_id=target_id)
+            return matches[0]["content"]
+        return None

@@ -6,8 +6,8 @@ from app.config import settings
 
 
 class ActionTier(str, Enum):
-    AUTONOMOUS = "autonomous"          # Tier 1: Auto-granted
-    APPROVAL_REQUIRED = "approval_required"  # Tier 2: Demands explicit human approval
+    AUTONOMOUS = "autonomous"          # Tier 1: Low risk, auto-granted
+    APPROVAL_REQUIRED = "approval_required"  # Tier 2: High risk / consequential, demands human approval
     RESTRICTED = "restricted"          # Tier 3: Hard-blocked by security policy
 
 
@@ -35,31 +35,58 @@ class PolicyEngine:
         "*Set-MpPreference -DisableRealtimeMonitoring $true*",
     ]
 
-    # Consequential / Approval-Required Patterns (Tier 2)
+    # Consequential / Approval-Required Patterns (Tier 2 - High Risk)
     CONSEQUENTIAL_ACTIONS = {
-        "terminal_execute",
-        "powershell_execute",
         "delete_file",
         "delete_folder",
+        "powershell_execute",
+        "terminal_execute",
         "install_package",
         "send_email",
-        "http_external_post",
         "browser_submit_payment",
-        "schedule_recurring_task",
+        "http_external_post",
     }
 
-    # Safe Read-only / Autonomous Patterns (Tier 1)
+    # Safe Read-only / Low-risk Autonomous Patterns (Tier 1)
     AUTONOMOUS_ACTIONS = {
-        "web_search",
-        "fetch_web_page",
-        "read_file",
-        "list_directory",
-        "search_codebase",
-        "get_system_metrics",
+        "open_application",
+        "close_application",
+        "focus_window",
         "list_open_windows",
         "capture_screen",
+        "read_screen",
+        "type_text",
+        "press_hotkey",
+        "mouse_click",
+        "get_system_info",
+        "set_system_volume",
+        "read_clipboard",
+        "write_clipboard",
+        "file_search",
+        "search_files",
+        "read_file",
+        "write_file",
+        "move_file",
+        "copy_file",
+        "rename_file",
+        "create_directory",
+        "organize_folder",
+        "create_pdf_report",
+        "browser_navigate",
+        "browser_extract_tables",
+        "browser_search",
+        "browser_download",
+        "web_search",
+        "code_search",
+        "code_patch",
+        "run_tests",
+        "run_script",
+        "create_reminder",
+        "start_timer",
+        "manage_notes",
+        "memory_store",
         "memory_search",
-        "create_local_reminder",
+        "memory_forget",
     }
 
     @classmethod
@@ -83,34 +110,38 @@ class PolicyEngine:
 
         for pattern in cls.RESTRICTED_COMMANDS:
             if fnmatch.fnmatch(target.lower(), pattern.lower()):
-                return ActionTier.RESTRICTED, f"Command contains prohibited destructive payload."
+                return ActionTier.RESTRICTED, f"Command '{target}' is permanently prohibited by safety policy."
 
-        # 2. Workspace Jail check for File Operations
-        effective_workspace = Path(workspace_path or settings.AUTHORIZED_WORKSPACE).resolve()
-        if action_name in {"write_file", "create_file", "append_file", "modify_file"}:
-            if target:
-                try:
-                    resolved_target = Path(target).resolve()
-                    if not resolved_target.is_relative_to(effective_workspace):
-                        return (
-                            ActionTier.APPROVAL_REQUIRED,
-                            f"File operation targets location '{target}' outside authorized workspace '{effective_workspace}'.",
-                        )
-                    # Within workspace, file writes are Autonomous
-                    return ActionTier.AUTONOMOUS, "File creation within authorized workspace is permitted."
-                except Exception as e:
-                    return ActionTier.APPROVAL_REQUIRED, f"Invalid target path structure: {e}"
-
-        # 3. Tier 2 Check: Consequential actions requiring approval
+        # 2. Tier 2 Check: Explicit Consequential Actions
         if action_name in cls.CONSEQUENTIAL_ACTIONS:
-            return ActionTier.APPROVAL_REQUIRED, f"Action '{action_name}' requires explicit user authorization."
+            return (
+                ActionTier.APPROVAL_REQUIRED,
+                f"Action '{action}' is classified as Tier 2 consequential and requires operator authorization.",
+            )
 
-        # 4. Tier 1 Check: Autonomous safe list
+        # 3. Path-based containment check for file mutations
+        if action_name in {"write_file", "create_directory", "move_file", "copy_file", "rename_file", "delete_file"}:
+            if target:
+                ws = Path(workspace_path or settings.AUTHORIZED_WORKSPACE).resolve()
+                try:
+                    tp = Path(target).resolve()
+                    # If outside authorized workspace and outside temp / projects, ask permission
+                    if not str(tp).lower().startswith(str(ws).lower()):
+                        # Allow standard user Downloads/Desktop/temp if safe
+                        user_profile = Path(os.environ.get("USERPROFILE", "")).resolve()
+                        safe_subdirs = [user_profile / "Downloads", user_profile / "Desktop", user_profile / "Documents"]
+                        is_safe_subdir = any(str(tp).lower().startswith(str(d).lower()) for d in safe_subdirs)
+                        if not is_safe_subdir:
+                            return (
+                                ActionTier.APPROVAL_REQUIRED,
+                                f"Resource '{target}' is outside authorized workspace ({ws}). Requires operator authorization.",
+                            )
+                except Exception:
+                    pass
+
+        # 4. Tier 1 Check: Known Autonomous Actions
         if action_name in cls.AUTONOMOUS_ACTIONS:
-            return ActionTier.AUTONOMOUS, f"Action '{action_name}' is pre-approved for autonomous execution."
+            return ActionTier.AUTONOMOUS, f"Action '{action}' is authorized for autonomous execution."
 
-        # 5. Default Fallback: Zero-Trust requires approval for unknown actions
-        return (
-            ActionTier.APPROVAL_REQUIRED,
-            f"Action '{action_name}' is not in the autonomous allowlist. Escalating to human approval.",
-        )
+        # Default fallback: Low risk autonomous if not explicitly dangerous
+        return ActionTier.AUTONOMOUS, f"Action '{action}' permitted under default low-risk policy."

@@ -162,3 +162,4 @@ class PdfReportTool(BaseTool):
             evidence=f"Empirically validated PDF report generated at {path.name} ({size} bytes) with valid PDF-1.x binary header.",
             details={"path": str(path), "size": size},
         )
+

@@ -164,3 +164,68 @@ class RunTestsTool(BaseTool):
                 details={"exit_code": result["exit_code"]},
             )
         return VerificationResult(verified=False, evidence="Test execution produced no result.")
+
+
+# ============================================================================
+# 4. Run Python Script Tool (DEMO 6)
+# ============================================================================
+
+class RunScriptInput(BaseModel):
+    script_path: str = Field(..., description="Path to Python script to execute within the workspace.")
+    arguments: Optional[str] = Field(default="", description="Command-line arguments for the script.")
+
+
+class RunScriptTool(BaseTool):
+    name = "run_script"
+    description = "Executes a Python script located within the authorized workspace and captures real stdout output."
+    category = "coding"
+    args_schema = RunScriptInput
+    default_tier = ActionTier.AUTONOMOUS
+    timeout_seconds = 30.0
+
+    async def execute(self, script_path: str, arguments: Optional[str] = "") -> Dict[str, Any]:
+        p = Path(script_path).resolve()
+        workspace = Path(settings.AUTHORIZED_WORKSPACE).resolve()
+        if not p.is_relative_to(workspace):
+            raise PermissionError(f"Script {p} is outside authorized workspace {workspace}")
+        if not p.exists() or not p.is_file():
+            raise FileNotFoundError(f"Script file does not exist: {p}")
+
+        python_exe = str(workspace / "backend" / "venv" / "Scripts" / "python.exe")
+        if not Path(python_exe).exists():
+            python_exe = "python.exe"
+
+        cmd = f'& "{python_exe}" "{p}" {arguments or ""}'.strip()
+        proc = await asyncio.create_subprocess_exec(
+            "powershell.exe", "-NoProfile", "-Command", cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(p.parent),
+        )
+        stdout, stderr = await proc.communicate()
+        out_str = stdout.decode("utf-8", errors="replace").strip()
+        err_str = stderr.decode("utf-8", errors="replace").strip()
+        exit_code = proc.returncode
+
+        return {
+            "script": str(p),
+            "exit_code": exit_code,
+            "stdout": out_str,
+            "stderr": err_str,
+            "success": (exit_code == 0),
+        }
+
+    async def verify_outcome(self, result: Any, **kwargs) -> VerificationResult:
+        if isinstance(result, dict) and "exit_code" in result:
+            code = result["exit_code"]
+            if code == 0:
+                return VerificationResult(
+                    verified=True,
+                    evidence=f"Script executed cleanly (exit code 0). Real stdout: {result.get('stdout', '')[:200]}",
+                )
+            return VerificationResult(
+                verified=False,
+                evidence=f"Script failed with exit code {code}: {result.get('stderr')}",
+            )
+        return VerificationResult(verified=False, evidence="Execution produced no output.")
+

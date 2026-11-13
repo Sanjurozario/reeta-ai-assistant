@@ -123,3 +123,4 @@ class VoiceService:
         }
         cls._is_speaking = False
         return audio_meta
+

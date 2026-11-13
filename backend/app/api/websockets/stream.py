@@ -2,6 +2,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from app.config import settings
 from app.core.gateway import model_gateway, GatewayMessage
 from app.core.tasks import broadcaster, TaskManager
 from app.database.session import async_session_factory
@@ -18,6 +19,27 @@ async def websocket_stream_endpoint(websocket: WebSocket):
     - Streams LLM thoughts, plan generation, tool calls, and verification events to desktop client.
     - Receives user prompt interactions, ticket decisions, cancellations, and emergency stops.
     """
+    token = websocket.query_params.get("token")
+    if settings.REETA_LAUNCH_TOKEN:
+        if token != settings.REETA_LAUNCH_TOKEN:
+            await websocket.close(code=1008, reason="Unauthorized: Invalid launch token")
+            logger.warning("Rejected WebSocket connection: invalid launch token")
+            return
+
+    # Check Origin
+    origin = websocket.headers.get("origin")
+    allowed_origins = [
+        "tauri://localhost",
+        "https://tauri.localhost",
+        "http://tauri.localhost",
+        "http://localhost:1420",
+        "http://127.0.0.1:1420",
+    ]
+    if origin and origin not in allowed_origins:
+        await websocket.close(code=1008, reason="Forbidden: Origin not permitted")
+        logger.warning(f"Rejected WebSocket connection from untrusted origin '{origin}'")
+        return
+
     await websocket.accept()
     broadcaster.connect(websocket)
     logger.info("Desktop client connected to /ws/v1/stream")

@@ -79,3 +79,4 @@ class PowerShellTool(BaseTool):
                     evidence=f"PowerShell command failed with non-zero exit code {code}: {result.get('stderr') or result.get('stdout')}",
                 )
         return VerificationResult(verified=False, evidence="Invalid command execution result.")
+
