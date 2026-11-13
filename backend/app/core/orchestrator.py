@@ -80,111 +80,152 @@ class CentralOrchestrator:
     @classmethod
     def plan_steps_for_objective(cls, objective: str, title: str = "") -> List[Dict[str, Any]]:
         """Determines ordered steps and assigned worker agents for a given objective."""
-        text = f"{title} {objective}".lower()
+        import re
+        raw = f"{title} {objective}".strip()
+        # Clean wake word prefix ("hey reeta", "hello reeta", "reeta")
+        cleaned = re.sub(r'^(?:hey|hi|hello|ok|okay|yo)?\s*(?:reeta|rita|reta|rhea|jarvis)[\s,.:!?-]*', '', objective, flags=re.I).strip()
+        if not cleaned:
+            cleaned = objective.strip()
+        text = f"{title} {cleaned}".lower()
 
-        # 1. Deletion / Recycle Bin (DEMO 4)
+        # 0. Wake word / Activation Alone
+        if not cleaned or cleaned.lower() in {"hey reeta", "reeta", "wake up", "are you there", "listen"}:
+            return [
+                {"step_number": 1, "title": "Acknowledge activation", "agent_type": "assistant", "input_payload": {"greeting": "Yes, I'm listening. How can I help?"}}
+            ]
+
+        # 1. Greetings
+        if re.search(r'^(?:hello|hi|hey|good\s+(?:morning|afternoon|evening)|greetings|howdy)(?:\s+reeta)?[\s.!?]*$', cleaned, re.I):
+            return [
+                {"step_number": 1, "title": "Respond to greeting", "agent_type": "assistant"}
+            ]
+
+        # 2. Deletion / Recycle Bin (DEMO 4)
         if "delete" in text or "remove file" in text or "trash" in text:
             return [
                 {"step_number": 1, "title": "Delete file and transfer to Windows Recycle Bin", "agent_type": "file"},
                 {"step_number": 2, "title": "Empirically verify file is removed from disk location", "agent_type": "file"},
             ]
 
-        # 2. Directory Creation + File Placement (DEMO 2)
-        elif ("create a folder" in text or "create folder" in text or "folder called" in text or "directory called" in text or "projects/test" in text) and ("file" in text or "notes" in text):
+        # 3. Directory Creation + File Placement (DEMO 2)
+        if ("create a folder" in text or "create folder" in text or "folder called" in text or "directory called" in text or "projects/test" in text) and ("file" in text or "notes" in text):
             return [
                 {"step_number": 1, "title": "Create directory structure in authorized workspace", "agent_type": "file"},
                 {"step_number": 2, "title": "Create and write file inside folder", "agent_type": "file"},
                 {"step_number": 3, "title": "Empirically verify directory and file exist on disk", "agent_type": "file"},
             ]
 
-        # 3. Windows Notepad Launch & Keystroke Input (DEMO 1)
-        elif "notepad" in text and ("write" in text or "type" in text or "note" in text or "say" in text or "hello" in text):
+        # 4. Windows Notepad Launch & Keystroke Input (DEMO 1)
+        if "notepad" in text and ("write" in text or "type" in text or "note " in text or "say" in text):
             return [
                 {"step_number": 1, "title": "Launch Windows Notepad application", "agent_type": "computer"},
                 {"step_number": 2, "title": "Type greeting note into active Notepad window", "agent_type": "computer"},
                 {"step_number": 3, "title": "Inspect open windows and verify active UI", "agent_type": "computer"},
             ]
 
-        # 4. Coding Task: Script Creation, Execution, & Output Capture (DEMO 6)
-        elif ("python script" in text or "create a script" in text or "create script" in text or "run script" in text or "small script" in text or ("script" in text and "output" in text)):
+        # 5. Generic Windows Desktop Applications (e.g. "open Notepad", "launch calc")
+        if any(k in text for k in ["notepad", "calc", "calculator", "open app", "launch", "close window"]):
+            return [
+                {"step_number": 1, "title": f"Launch target application for '{cleaned[:30]}'", "agent_type": "computer"},
+                {"step_number": 2, "title": "Inspect open windows and verify active UI", "agent_type": "computer"},
+            ]
+
+        # 6. Coding Task: Script Creation, Execution, & Output Capture (DEMO 6)
+        if ("python script" in text or "create a script" in text or "create script" in text or "run script" in text or "small script" in text or ("script" in text and "output" in text)):
             return [
                 {"step_number": 1, "title": "Create Python script in authorized workspace", "agent_type": "coding"},
                 {"step_number": 2, "title": "Execute script and capture real stdout output", "agent_type": "coding"},
                 {"step_number": 3, "title": "Empirically verify script execution and output", "agent_type": "coding"},
             ]
 
-        # 5. Generic File Creation (Write, Temp, .txt)
-        elif "file" in text or "write" in text or "create text" in text or "temp" in text or ".txt" in text:
-            return [
-                {"step_number": 1, "title": f"Create and write file content for '{title or objective[:30]}'", "agent_type": "file"},
-                {"step_number": 2, "title": "Empirically verify file existence and contents on disk", "agent_type": "file"},
-            ]
-
-        # 6. Web Research with Summarization & Citations (DEMO 3)
-        elif ("search" in text or "research" in text or "news" in text) and ("web" in text or "summarise" in text or "summarize" in text or "source" in text or "topic" in text):
-            return [
-                {"step_number": 1, "title": "Search web for latest news and gather source citations", "agent_type": "research"},
-                {"step_number": 2, "title": "Synthesize research summary with explicit URL citations", "agent_type": "research"},
-            ]
-
-        # 7. Cognitive Semantic Memory (DEMO 5)
-        elif "prefer" in text or "remember" in text or "preference" in text or "memory" in text:
-            if "what" in text or "tell me" in text or "recall" in text or "show" in text:
-                return [
-                    {"step_number": 1, "title": "Retrieve semantic preference from pgvector memory and synthesize answer", "agent_type": "memory"},
-                ]
-            else:
-                return [
-                    {"step_number": 1, "title": "Store user preference in cognitive pgvector memory", "agent_type": "memory"},
-                ]
-
-        # 8. PDF Report Generation
-        elif "pdf" in text or "report" in text:
-            return [
-                {"step_number": 1, "title": f"Gather research data on '{title or objective[:30]}'", "agent_type": "research"},
-                {"step_number": 2, "title": "Synthesize report and generate PDF document", "agent_type": "file"},
-            ]
-
-        # 9. Folder Organization
-        elif "organize" in text or "clean" in text:
-            return [
-                {"step_number": 1, "title": "Scan directory and discover files", "agent_type": "file"},
-                {"step_number": 2, "title": "Batch categorize and organize into folders", "agent_type": "file"},
-            ]
-
-        # 10. Generic Windows Desktop Applications
-        elif "app" in text or "open" in text or "calc" in text:
-            return [
-                {"step_number": 1, "title": f"Launch target application for '{title or objective[:30]}'", "agent_type": "computer"},
-                {"step_number": 2, "title": "Inspect open windows and verify active UI", "agent_type": "computer"},
-            ]
-
-        # 11. Code Search & Testing
-        elif "bug" in text or "pytest" in text or ("test" in text and ("suite" in text or "unit" in text or "run test" in text or "test suite" in text)):
+        # 7. Code Search & Testing
+        if "bug" in text or "pytest" in text or ("test" in text and ("suite" in text or "unit" in text or "run test" in text or "test suite" in text)):
             return [
                 {"step_number": 1, "title": "Search codebase for target symbol or bug", "agent_type": "coding"},
                 {"step_number": 2, "title": "Execute test suite to confirm baseline", "agent_type": "coding"},
             ]
 
-        # 12. Browser Automation
-        elif "browse" in text or "http" in text or "website" in text or "extract" in text or "wikipedia" in text:
+        # 8. File Operations: Desktop file or specific file creation
+        if "desktop" in text and ("file" in text or "create" in text or "txt" in text or "note" in text):
+            return [
+                {"step_number": 1, "title": f"Create and write file on Desktop for '{cleaned[:30]}'", "agent_type": "file"},
+                {"step_number": 2, "title": "Empirically verify file existence and contents on disk", "agent_type": "file"},
+            ]
+
+        # 9. Generic File Creation (Write, Temp, .txt)
+        if ("file" in text or "write" in text or "create text" in text or "temp" in text or ".txt" in text) and not ("what is" in text or "how" in text):
+            return [
+                {"step_number": 1, "title": f"Create and write file content for '{cleaned[:30]}'", "agent_type": "file"},
+                {"step_number": 2, "title": "Empirically verify file existence and contents on disk", "agent_type": "file"},
+            ]
+
+        # 10. Folder Organization
+        if "organize" in text or "clean" in text:
+            return [
+                {"step_number": 1, "title": "Scan directory and discover files", "agent_type": "file"},
+                {"step_number": 2, "title": "Batch categorize and organize into folders", "agent_type": "file"},
+            ]
+
+        # 11. PDF Report Generation
+        if "pdf" in text or "report" in text:
+            return [
+                {"step_number": 1, "title": f"Gather research data on '{cleaned[:30]}'", "agent_type": "research"},
+                {"step_number": 2, "title": "Synthesize report and generate PDF document", "agent_type": "file"},
+            ]
+
+        # 12. Actual Web Research Requests
+        if ("research" in text or "search web" in text or "query web" in text or "find news" in text):
+            return [
+                {"step_number": 1, "title": "Search web for latest information and gather citations", "agent_type": "research"},
+                {"step_number": 2, "title": "Synthesize concise research summary with citations", "agent_type": "research"},
+            ]
+
+        # 13. Browser Automation
+        if "browse" in text or "http" in text or "website" in text or "extract" in text or "wikipedia" in text:
             return [
                 {"step_number": 1, "title": f"Navigate to website and capture page context", "agent_type": "browser"},
                 {"step_number": 2, "title": "Extract structured information from page", "agent_type": "browser"},
             ]
 
-        # 13. Reminders & Scheduling
-        elif "remind" in text or "schedule" in text:
+        # 14. Cognitive Semantic Memory (DEMO 5)
+        if "prefer" in text or "remember" in text or "preference" in text or "memory" in text:
+            if "what" in text or "tell me" in text or "recall" in text or "show" in text:
+                return [
+                    {"step_number": 1, "title": "Retrieve semantic preference from pgvector memory", "agent_type": "memory"},
+                    {"step_number": 2, "title": "Synthesize response from retrieved memory", "agent_type": "memory"},
+                ]
+            else:
+                return [
+                    {"step_number": 1, "title": "Store user preference in cognitive pgvector memory", "agent_type": "memory"},
+                    {"step_number": 2, "title": "Confirm memory storage and update status", "agent_type": "memory"},
+                ]
+
+        # 15. Reminders & Scheduling
+        if "remind" in text or "schedule" in text:
             return [
-                {"step_number": 1, "title": f"Create scheduled reminder for '{title or objective[:30]}'", "agent_type": "productivity"},
+                {"step_number": 1, "title": f"Create scheduled reminder for '{cleaned[:30]}'", "agent_type": "productivity"},
+                {"step_number": 2, "title": "Confirm reminder schedule and status", "agent_type": "productivity"},
             ]
 
-        # 14. Fallback Direct Synthesis
-        else:
+        # 16. Capabilities / What can you do
+        if "what can you do" in text or "your capabilities" in text or "who are you" in text or "help" in text:
             return [
-                {"step_number": 1, "title": f"Analyze and decompose requirements for '{title or objective[:30]}'", "agent_type": "research"},
-                {"step_number": 2, "title": "Synthesize response and verify task completion", "agent_type": "research"},
+                {"step_number": 1, "title": "Explain capabilities and assist user", "agent_type": "assistant"},
+                {"step_number": 2, "title": "Present interactive command suggestions", "agent_type": "assistant"},
             ]
+
+        # 17. Math / Factual Questions / General Conversation
+        if any(k in text for k in ["multiplied by", "times", "divided by", "plus", "minus", "calculate", "what is", "who is", "why is", "how do", "how to", "tell me about"]):
+            return [
+                {"step_number": 1, "title": f"Process inquiry: '{cleaned[:40]}'", "agent_type": "assistant"},
+                {"step_number": 2, "title": "Synthesize response and verify completion", "agent_type": "assistant"},
+            ]
+
+        # 18. Fallback: Direct Assistant Response (NEVER raw ResearchAgent decomposition!)
+        return [
+            {"step_number": 1, "title": f"Process inquiry: '{cleaned[:40]}'", "agent_type": "assistant"},
+            {"step_number": 2, "title": "Synthesize response and verify completion", "agent_type": "assistant"},
+        ]
 
     # ========================================================================
     # Graph Nodes
@@ -438,12 +479,47 @@ class CentralOrchestrator:
 
         error_detail = {"error": state.get("error")} if state.get("error") else None
 
+        # Synthesize clean, human-readable final response
+        final_response = ""
+        for s in state.get("steps", []):
+            res = s.get("result", {})
+            if isinstance(res, dict):
+                if res.get("response"):
+                    final_response = res["response"]
+                elif res.get("answer"):
+                    final_response = res["answer"]
+
+        if not final_response and not has_error:
+            for s in reversed(state.get("steps", [])):
+                res = s.get("result", {})
+                if isinstance(res, dict):
+                    if res.get("app") and res.get("status") == "launched":
+                        app_name = res.get("app", "Application").replace(".exe", "").capitalize()
+                        final_response = f"{app_name} has been launched and verified active on your desktop."
+                        break
+                    elif res.get("filepath") and res.get("status") == "written":
+                        fname = Path(res["filepath"]).name
+                        final_response = f"Successfully created '{fname}' at {res['filepath']}."
+                        break
+                    elif res.get("tables_extracted"):
+                        final_response = f"Extracted {res['tables_extracted']} tables from webpage."
+                        break
+                    elif res.get("stdout"):
+                        final_response = f"Script execution output:\n{res['stdout']}"
+                        break
+            if not final_response:
+                final_response = "Task execution completed and verified."
+
         async with async_session_factory() as session:
             await TaskManager.update_task_status(
                 session=session,
                 task_id=uuid.UUID(task_id),
                 status=final_status,
-                result={"artifacts": state.get("artifacts", []), "steps": state.get("steps", [])},
+                result={
+                    "final_response": final_response,
+                    "artifacts": state.get("artifacts", []),
+                    "steps": state.get("steps", []),
+                },
                 error_detail=error_detail,
             )
 

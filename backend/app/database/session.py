@@ -30,6 +30,13 @@ if is_sqlite:
     @event.listens_for(engine.sync_engine, "connect")
     def on_connect(dbapi_conn, rec):
         try:
+            cursor = dbapi_conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL;")
+            cursor.execute("PRAGMA busy_timeout=30000;")
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"Failed setting sqlite PRAGMAs: {e}")
+        try:
             import sqlite_vec
             dbapi_conn.enable_load_extension(True)
             sqlite_vec.load(dbapi_conn)

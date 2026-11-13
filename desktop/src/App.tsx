@@ -252,8 +252,6 @@ export default function App() {
     store.getState().setError(null)
     sfx.play('wake')
 
-    // "Jarvis, what's happening in AI this week" in one breath. Waiting for a
-    // greeting he didn't need is the most common way an assistant wastes time.
     if (trailing) {
       void respond(trailing)
       return
@@ -261,12 +259,12 @@ export default function App() {
 
     store.getState().setPhase('waking')
 
-    // Answer to his name. Deliberately NOT awaited any more: the microphone is
-    // already open and the echo filter knows his voice, so the user can talk
-    // straight over the greeting instead of waiting it out.
+    const greetingText = "Yes, I'm listening. How can I help?"
+    store.getState().pushTurn({ id: newId(), role: 'jarvis', text: greetingText })
+
     const greeting = createSpeaker()
     speaker.current = greeting
-    greeting.say(attention())
+    greeting.say(greetingText)
     void greeting.end()
 
     listen(AWAIT_SPEECH_MS)
@@ -320,12 +318,12 @@ export default function App() {
 
     // People keep using the name as a vocative once they're already talking.
     if (BARE_NAME.test(text)) {
-      listen(AWAIT_SPEECH_MS)
+      onWake('')
       return
     }
     const said = text.replace(LEADING_NAME, '').trim()
     if (!said) {
-      listen(AWAIT_SPEECH_MS)
+      onWake('')
       return
     }
 
@@ -705,13 +703,26 @@ export default function App() {
     // Listen for text commands from the HUD command capsule at top-level
     const handleReetaCommand = (e: any) => {
       const text = e.detail
-      if (text && typeof text === 'string' && text.trim()) {
-        const phase = store.getState().phase
-        if (phase === 'offline') {
-          void powerOn()
-        }
-        void respond(text.trim())
+      if (!text || typeof text !== 'string' || !text.trim()) return
+      const trimmed = text.trim()
+      const phase = store.getState().phase
+      if (phase === 'offline') {
+        void powerOn()
       }
+      if (BARE_NAME.test(trimmed)) {
+        const s = store.getState()
+        s.pushTurn({ id: newId(), role: 'user', text: trimmed })
+        const reply = "Yes, I'm listening. How can I help?"
+        s.pushTurn({ id: newId(), role: 'jarvis', text: reply })
+        const greeting = createSpeaker()
+        speaker.current = greeting
+        greeting.say(reply)
+        void greeting.end()
+        listen(AWAIT_SPEECH_MS)
+        return
+      }
+      const stripped = trimmed.replace(LEADING_NAME, '').trim()
+      void respond(stripped || trimmed)
     }
     window.addEventListener('reeta-command', handleReetaCommand)
 

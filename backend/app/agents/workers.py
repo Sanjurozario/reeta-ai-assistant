@@ -5,6 +5,18 @@ from app.agents.base import BaseAgent
 logger = logging.getLogger("reeta.agents.workers")
 
 
+class AssistantAgent(BaseAgent):
+    name = "assistant_agent"
+    role_description = "Handles conversational interaction, direct questions, greetings, math, and general assistance."
+    system_prompt = (
+        "You are REETA (Responsive Executive Engine for Tasks and Automation), an advanced personal AI assistant. "
+        "Provide direct, natural, conversational responses. "
+        "Do NOT output raw analysis reports, internal checklists, or system decomposition templates. "
+        "Be concise, precise, friendly, and articulate."
+    )
+    assigned_tools = []
+
+
 class ResearchAgent(BaseAgent):
     name = "research_agent"
     role_description = "Conducts deep web research, verifies facts, and compiles structured PDF/Markdown reports."

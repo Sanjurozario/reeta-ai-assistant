@@ -85,19 +85,25 @@ class BaseAgent(ABC):
                 )
 
             t0 = time.perf_counter()
-            messages = [
-                GatewayMessage(role="system", content=self.system_prompt),
-                GatewayMessage(
-                    role="user",
-                    content=(
-                        f"You are the {self.name} for REETA (Responsive Executive Engine for Tasks and Automation).\n"
-                        f"Execute this step with direct reasoning and precision.\n"
-                        f"Objective: {task_objective}\n"
-                        f"Step: {step_title}\n"
-                        f"Context: {json.dumps(context)}"
+            if self.name == "assistant_agent":
+                messages = [
+                    GatewayMessage(role="system", content=self.system_prompt),
+                    GatewayMessage(role="user", content=task_objective),
+                ]
+            else:
+                messages = [
+                    GatewayMessage(role="system", content=self.system_prompt),
+                    GatewayMessage(
+                        role="user",
+                        content=(
+                            f"You are the {self.name} for REETA (Responsive Executive Engine for Tasks and Automation).\n"
+                            f"Execute this step directly without producing internal metadata or verbose checklists.\n"
+                            f"Objective: {task_objective}\n"
+                            f"Step: {step_title}\n"
+                            f"Context: {json.dumps(context)}"
+                        ),
                     ),
-                ),
-            ]
+                ]
             try:
                 gw_resp = await model_gateway.generate_with_fallback(
                     messages=messages,
@@ -110,16 +116,17 @@ class BaseAgent(ABC):
                 )
                 try:
                     from app.core.tasks import broadcaster
-                    await broadcaster.broadcast(
-                        event="agent_message",
-                        task_id=tid_str,
-                        payload={
-                            "content": gw_resp.content,
-                            "provider": gw_resp.provider,
-                            "model": gw_resp.model,
-                            "agent": self.name,
-                        },
-                    )
+                    if self.name == "assistant_agent" or "synthesize" in step_title.lower() or "respond" in step_title.lower():
+                        await broadcaster.broadcast(
+                            event="agent_message",
+                            task_id=tid_str,
+                            payload={
+                                "content": gw_resp.content,
+                                "provider": gw_resp.provider,
+                                "model": gw_resp.model,
+                                "agent": self.name,
+                            },
+                        )
                 except Exception as b_err:
                     logger.warning(f"Failed to broadcast agent_message: {b_err}")
                 return AgentStepResult(
@@ -243,6 +250,7 @@ class BaseAgent(ABC):
             or "python script" in title_lower
             or "create a temporary" in obj_lower
             or "create a text file" in obj_lower
+            or "desktop" in obj_lower
         ):
             if "write_file" in self.assigned_tools:
                 if "python script" in title_lower or "script" in title_lower:
@@ -256,6 +264,19 @@ class BaseAgent(ABC):
                 elif "projects/test" in obj_lower or "projects" in obj_lower or "inside folder" in title_lower:
                     target_path = str(workspace / "Projects" / "Test" / "notes.txt")
                     content = "REETA Autonomous OS: Task verified and recorded in Projects/Test/notes.txt"
+                elif "desktop" in obj_lower:
+                    desktop_dir = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Desktop"
+                    path_match = re.search(r'called\s+[\'"]?([a-zA-Z0-9_\-\\\/\.]+\.[a-zA-Z0-9]+)[\'"]?', task_objective, re.I)
+                    if path_match:
+                        target_path = str(desktop_dir / Path(path_match.group(1)).name)
+                    else:
+                        target_path = str(desktop_dir / "reeta_hello.txt")
+                    
+                    cont_match = re.search(r'containing\s+[\'"]?([^\'"]+)[\'"]?', task_objective, re.I)
+                    if cont_match:
+                        content = cont_match.group(1).strip()
+                    else:
+                        content = "Hello from REETA"
                 else:
                     path_match = re.search(r'[\'"]([a-zA-Z0-9_\-\\\/\.]+\.[a-zA-Z0-9]+)[\'"]', task_objective)
                     if path_match:
@@ -267,7 +288,7 @@ class BaseAgent(ABC):
                     else:
                         target_path = str(workspace / "temp" / f"output_{int(time.time())}.txt")
 
-                    text_match = re.search(r'(?:write|text|content)\s+[\'"]([^\'"]+)[\'"]', task_objective, re.IGNORECASE)
+                    text_match = re.search(r'(?:write|text|content|containing)\s+[\'"]([^\'"]+)[\'"]', task_objective, re.IGNORECASE)
                     if text_match:
                         content = text_match.group(1).strip()
                     elif "hello world" in obj_lower:
@@ -284,8 +305,15 @@ class BaseAgent(ABC):
                 if not path:
                     from app.memory.store import MemoryService
                     path = MemoryService.get_working_memory("global").get("last_created_file")
+                if not path and "desktop" in obj_lower:
+                    desktop_dir = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Desktop"
+                    path = str(desktop_dir / "reeta_hello.txt")
                 if not path and ("projects/test" in obj_lower or "notes" in obj_lower):
                     path = str(workspace / "Projects" / "Test" / "notes.txt")
+                if not path:
+                    path_match = re.search(r'[\'"]([a-zA-Z0-9_\-\\\/\.]+\.[a-zA-Z0-9]+)[\'"]', task_objective)
+                    path = str(workspace / "temp" / Path(path_match.group(1)).name) if path_match else str(workspace / "temp" / "output.txt")
+                return "read_file", {"filepath": str(path)}
                 if not path:
                     path_match = re.search(r'[\'"]([a-zA-Z0-9_\-\\\/\.]+\.[a-zA-Z0-9]+)[\'"]', task_objective)
                     path = str(workspace / "temp" / Path(path_match.group(1)).name) if path_match else str(workspace / "temp" / "output.txt")
